@@ -1,7 +1,18 @@
 // MONGODB: catálogo (planes, materias con sus comisiones embebidas, estudiantes, mesas) y
 // saga_log (registro de pasos de cada operación). El archivo tiene DOS funciones:
-//   crearMongoRepo  → catálogo, lo usan los problemas
+//   crearMongoRepo  → catálogo, lo usan los problemas y el menú interactivo
 //   crearLogMongo   → saga_log, lo usa el runner de sagas
+
+// Convierte lo que escribe el usuario en un filtro de Mongo: cada palabra debe aparecer
+// (sin distinguir mayúsculas ni tildes) en alguno de los campos indicados.
+// Lo usan las búsquedas del menú interactivo (buscarEstudiantes, buscarMaterias).
+const CLASES = { a: 'aáàä', e: 'eéèë', i: 'iíìï', o: 'oóòö', u: 'uúùü', n: 'nñ' };
+const patron = (palabra) => palabra.normalize('NFD').replace(/[\u0300-\u036f]/g, '') // saca tildes
+  .replace(/[.*+?^${}()|[\]\\]/g, '\\$&')                                             // escapa símbolos de regex
+  .replace(/[aeioun]/gi, (ch) => `[${CLASES[ch.toLowerCase()]}]`);                    // 'a' → [aáàä]
+const filtroTexto = (texto, campos) => ({
+  $and: texto.trim().split(/\s+/).map((p) => ({ $or: campos.map((campo) => ({ [campo]: new RegExp(patron(p), 'i') })) })),
+});
 
 // ============================================================================
 // CATÁLOGO
@@ -49,6 +60,20 @@ export function crearMongoRepo(db) {
         { upsert: true },
       );
     },
+
+    // ---- BÚSQUEDAS PARA EL MENÚ INTERACTIVO (solo lectura). Cada palabra escrita debe
+    // aparecer en alguno de los campos; ignoran mayúsculas y tildes.
+    buscarEstudiantes: (texto, limite = 10) =>
+      c('estudiantes').find(filtroTexto(texto, ['nombre', 'apellido', '_id'])).limit(limite).toArray(),
+    buscarMaterias: (texto, limite = 10) =>
+      c('materias').find(filtroTexto(texto, ['nombre', 'codigo', '_id']), { projection: { comisiones: 0 } }).limit(limite).toArray(),
+    // Comisiones de una materia en un cuatrimestre (están embebidas en la materia).
+    async comisionesDeMateria(materia_id, cuatrimestre_id) {
+      const m = await c('materias').findOne({ _id: materia_id }, { projection: { comisiones: 1 } });
+      return (m?.comisiones ?? []).filter((x) => x.cuatrimestre_id === cuatrimestre_id);
+    },
+    mesasDeMateria: (materia_id) => c('mesas').find({ materia_id }).sort({ fecha: 1 }).toArray(),
+
     // P1, paso 'habilitar' y su compensación (vuelve a 'pendiente_habilitacion').
     setPlanEstado: (plan_id, estado) => c('planes').updateOne({ _id: plan_id }, { $set: { estado } }),
   };

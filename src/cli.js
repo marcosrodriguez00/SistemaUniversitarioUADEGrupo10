@@ -1,7 +1,8 @@
-// CLI: cada problema y cada escenario de falla se ejecuta de forma individual.
-//   npm run cli                       -> menú interactivo
-//   npm run cli -- p2 --alumno A-DEMO-01 --comision COM-015-2026-2-1
-//   npm run cli -- p2 --alumno A-DEMO-01 --comision COM-015-2026-2-1 --fail-at registrar-inscripcion
+// CLI: capa de PRESENTACIÓN. Cada problema y cada escenario de falla se ejecuta desde acá.
+//   node src/cli.js                   -> menú interactivo (elige alumnos, materias y comisiones de listas)
+//   node src/cli.js p2 --alumno A-DEMO-01 --comision COM-015-2026-2-1
+//   node src/cli.js p2 --alumno A-DEMO-01 --comision COM-015-2026-2-1 --fail-at registrar-inscripcion
+// No tiene lógica de negocio: traduce argumentos a llamadas a los problemas e imprime la evidencia.
 import fs from 'node:fs';
 import readline from 'node:readline/promises';
 import { parseArgs } from 'node:util';
@@ -14,8 +15,10 @@ import {
   p6Trayectoria, p7PuedoCursar, p7Destraba, p7CadenaMasLarga, p8Rectificar, p8Trazabilidad, SAGAS,
 } from './problemas/index.js';
 import { generarCatalogo, elegirDemo } from './seed/generador.js';
+import { pedirParametro } from './seleccion.js';
 
 // Ids de demo: se calculan con la MISMA semilla (42) que el seed, así coinciden con los datos cargados.
+// Se usan solo como VALORES POR DEFECTO: cualquier id válido se puede ingresar a mano.
 const DEMO = elegirDemo(generarCatalogo(42));
 // Imprime JSON legible (convierte los BigInt de Cassandra a número).
 const imprimir = (x) => console.log(JSON.stringify(x, (k, v) => (typeof v === 'bigint' ? Number(v) : v), 2));
@@ -47,7 +50,8 @@ const parseNotas = (s) => s.split(',').map((p) => { const [alumno_id, nota] = p.
 // y run (qué ejecuta). Los valores por defecto son los alumnos y comisiones de demo del seed.
 export const COMANDOS = {
   p1: {
-    desc: 'P1 Carga de un plan de estudios (fallas: correlatividad-medio, habilitar)',
+    desc: 'P1 Carga de un plan de estudios',
+    fallas: [['correlatividad-medio', 'Falla a mitad de la carga de correlatividades'], ['habilitar', 'Falla al habilitar el plan (último paso)']],
     params: [['archivo', 'src/seed/plan-ejemplo.json']],
     run: async (ctx, a) => {
       const input = JSON.parse(fs.readFileSync(a.archivo, 'utf8'));
@@ -58,13 +62,15 @@ export const COMANDOS = {
     },
   },
   p2: {
-    desc: 'P2 Inscripción a cursada (fallas: reservar-cupo, registrar-inscripcion)',
+    desc: 'P2 Inscripción a cursada',
+    fallas: [['reservar-cupo', 'Falla justo después de reservar el cupo en Redis'], ['registrar-inscripcion', 'Falla después de grabar en Cassandra (se deshace todo)']],
     params: [['alumno', DEMO.alumnos.elegible], ['comision', DEMO.comisiones.llena_casi]],
     // `a.operacion` permite REINTENTAR la misma operación (--operacion OP-...): demuestra idempotencia.
     run: (ctx, a) => conEvidencia(ctx, [['comision', a.comision, a.alumno]], () => p2Inscribir(ctx, { alumno_id: a.alumno, comision_id: a.comision }, a.operacion && { operacion_id: a.operacion })),
   },
   p3: {
-    desc: 'P3 Cambio de comisión (fallas: reservar-destino, liberar-origen, mover-inscripcion)',
+    desc: 'P3 Cambio de comisión',
+    fallas: [['reservar-destino', 'Falla después de reservar el lugar en la comisión destino'], ['liberar-origen', 'Falla después de liberar el lugar en el origen'], ['mover-inscripcion', 'Falla después de mover la inscripción en Cassandra']],
     params: [['alumno', DEMO.alumnos.cambia], ['origen', DEMO.comisiones.origen], ['destino', DEMO.comisiones.vacia]],
     // Evidencia de las DOS comisiones: origen y destino.
     run: (ctx, a) => conEvidencia(ctx, [['comision', a.origen, a.alumno], ['comision', a.destino, a.alumno]], () => p3CambiarComision(ctx, { alumno_id: a.alumno, comision_origen: a.origen, comision_destino: a.destino })),
@@ -75,7 +81,8 @@ export const COMANDOS = {
     run: async (ctx, a) => imprimir(await p4CargarCalificaciones(ctx, { docente_id: a.docente, tipo: a.tipo, comision_id: a.comision || undefined, mesa_id: a.mesa || undefined, notas: parseNotas(a.notas) })),
   },
   p5: {
-    desc: 'P5 Inscripción a mesa de final (fallas: reservar-cupo, registrar-inscripcion)',
+    desc: 'P5 Inscripción a mesa de final',
+    fallas: [['reservar-cupo', 'Falla justo después de reservar el cupo de la mesa'], ['registrar-inscripcion', 'Falla después de grabar en Cassandra (se deshace todo)']],
     params: [['alumno', DEMO.alumnos.para_mesa], ['mesa', DEMO.mesa]],
     run: (ctx, a) => conEvidencia(ctx, [['mesa', a.mesa, a.alumno]], () => p5InscribirMesa(ctx, { alumno_id: a.alumno, mesa_id: a.mesa })),
   },
@@ -84,13 +91,14 @@ export const COMANDOS = {
     desc: 'P7 Qué puedo cursar (alumno) / qué destrabo (materia) / cadena más larga',
     params: [['alumno', DEMO.alumnos.elegible], ['materia', ''], ['plan', DEMO.plan_id], ['cadena', '']],
     run: async (ctx, a) => {
-      if (a.cadena) return imprimir(await p7CadenaMasLarga(ctx, { plan_id: a.plan }));          // 7c
+      if (a.cadena) return imprimir(await p7CadenaMasLarga(ctx, { plan_id: a.plan }));                   // 7c
       if (a.materia) return imprimir(await p7Destraba(ctx, { materia_id: a.materia, plan_id: a.plan })); // 7b
-      return imprimir(await p7PuedoCursar(ctx, { alumno_id: a.alumno, plan_id: a.plan }));       // 7a
+      return imprimir(await p7PuedoCursar(ctx, { alumno_id: a.alumno, plan_id: a.plan }));                // 7a
     },
   },
   p8: {
-    desc: 'P8 Rectificar nota (fallas: rectificar, marcado-medio) — o --trazabilidad para la consulta compuesta',
+    desc: 'P8 Rectificar nota (o consulta de trazabilidad)',
+    fallas: [['rectificar', 'Falla después de corregir la nota'], ['marcado-medio', 'Falla a mitad del marcado de inscripciones en revisión']],
     params: [['alumno', DEMO.alumnos.para_rectificar], ['materia', DEMO.prerrequisito], ['nota', '2'], ['trazabilidad', '']],
     run: async (ctx, a) => {
       if (a.trazabilidad) return imprimir(await p8Trazabilidad(ctx, { alumno_id: a.alumno }));
@@ -141,8 +149,22 @@ export const COMANDOS = {
   demo: { desc: 'Muestra los ids de demo del seed', params: [], run: async () => imprimir(DEMO), sinMotores: true },
 };
 
-// Menú interactivo: lista los comandos, pregunta los parámetros (con su valor por defecto) y
-// pregunta en qué paso provocar una falla (solo en las sagas).
+// Muestra "1. Sin falla" + las fallas disponibles de la saga y devuelve el paso elegido (o null).
+async function elegirFalla(rl, fallas) {
+  console.log('  Ejecución:');
+  console.log('    1. Normal (sin falla)');
+  fallas.forEach(([paso, desc], i) => console.log(`    ${i + 2}. Provocar falla — ${desc}  [${paso}]`));
+  for (;;) {
+    const r = (await rl.question('  Número (Enter = 1, normal): ')).trim();
+    if (r === '' || r === '1') return null;
+    const f = fallas[Number(r) - 2];
+    if (f) return f[0];
+    console.log(`  Número inválido: elegí entre 1 y ${fallas.length + 1}.`);
+  }
+}
+
+// MENÚ INTERACTIVO: lista los comandos, pide cada parámetro (con selector de alumno, materia,
+// comisión o mesa; ver seleccion.js) y pregunta en qué paso provocar una falla (solo en las sagas).
 async function menu(ctx) {
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
   const nombres = Object.keys(COMANDOS);
@@ -157,34 +179,36 @@ async function menu(ctx) {
       if (!nombre) { console.log('Opción inválida'); continue; }
       const cmd = COMANDOS[nombre];
       const a = {};
-      for (const [k, def] of cmd.params) a[k] = (await rl.question(`  ${k} [${def}]: `)).trim() || def;
+      const estado = {}; // recuerda la materia elegida mientras dura este comando
+      for (const [k, def] of cmd.params) a[k] = await pedirParametro(rl, ctx, k, def, estado);
+      // Selector de falla: solo para las sagas (comandos con `fallas`). La opción 1 siempre es "sin falla".
       let failAt = null;
-      if (/^p[1-8]$/.test(nombre) && !['p4', 'p6', 'p7'].includes(nombre)) failAt = (await rl.question('  provocar falla en (vacío = ninguna): ')).trim() || null;
+      if (cmd.fallas && !a.trazabilidad) failAt = await elegirFalla(rl, cmd.fallas);
       conFailpoints(ctx, failAt);
       try { await cmd.run(ctx, a); } catch (e) { console.error('✘', e.message); }
     }
   } finally { rl.close(); }
 }
 
-// Punto de entrada: lee el comando y los argumentos, conecta los motores y ejecuta.
+// PUNTO DE ENTRADA: lee el comando y los argumentos, conecta los motores y ejecuta.
 async function main() {
   const [nombre, ...resto] = process.argv.slice(2);
   if (nombre === 'demo') return imprimir(DEMO); // no necesita conectar los motores
   if (nombre && !COMANDOS[nombre] && nombre !== 'menu') { console.error(`Comando desconocido: ${nombre}\nDisponibles: ${Object.keys(COMANDOS).join(', ')}`); process.exitCode = 1; return; }
-    // Opciones conocidas: las banderas (sin valor) son booleanas y TODO parámetro de cada comando
+  // Opciones conocidas: las banderas (sin valor) son booleanas y TODO parámetro de cada comando
   // se declara como string. Si no se declaran, parseArgs trata "--alumno A-DEMO-02" como una
   // bandera sin valor y el id queda suelto.
   const options = { 'fail-at': { type: 'string' }, operacion: { type: 'string' }, cadena: { type: 'boolean' }, trazabilidad: { type: 'boolean' } };
   for (const cmd of Object.values(COMANDOS)) for (const [k] of cmd.params) if (!(k in options)) options[k] = { type: 'string' };
-    const { values } = parseArgs({ args: resto, strict: false, options });
-    const ctx = await crearContexto({ failAt: values['fail-at'] ?? null }); // --fail-at activa el failpoint
+  const { values } = parseArgs({ args: resto, strict: false, options });
+  const ctx = await crearContexto({ failAt: values['fail-at'] ?? null }); // --fail-at activa el failpoint
   try {
     if (!nombre || nombre === 'menu') return await menu(ctx);
     const cmd = COMANDOS[nombre];
     const a = {};
     for (const [k, def] of cmd.params) {
       const v = values[k];
-      a[k] = v === true ? 'true' : v ?? def; // flag sin valor -> 'true'; sin flag -> valor por defecto
+      a[k] = v === true ? 'true' : v ?? def; // bandera sin valor -> 'true'; sin parámetro -> valor por defecto
     }
     if (values.operacion) a.operacion = values.operacion; // reintento de una operación existente
     await cmd.run(ctx, a);
