@@ -1,0 +1,26 @@
+{
+  "plan_id": "PLAN-DEMO",
+  "nombre": "Plan de ejemplo para la demo de P1",
+  "carrera_id": "CAR-DEMO",
+  "materias": [
+    { "materia_id": "MAT-901", "codigo": "DM901", "nombre": "Fundamentos", "creditos": 6 },
+    { "materia_id": "MAT-902", "codigo": "DM902", "nombre": "Programación I", "creditos": 6 },
+    { "materia_id": "MAT-903", "codigo": "DM903", "nombre": "Matemática Discreta", "creditos": 6 },
+    { "materia_id": "MAT-904", "codigo": "DM904", "nombre": "Programación II", "creditos": 6 },
+    { "materia_id": "MAT-905", "codigo": "DM905", "nombre": "Bases de Datos I", "creditos": 6 },
+    { "materia_id": "MAT-906", "codigo": "DM906", "nombre": "Algoritmos", "creditos": 6 },
+    { "materia_id": "MAT-907", "codigo": "DM907", "nombre": "Bases de Datos II", "creditos": 6 },
+    { "materia_id": "MAT-908", "codigo": "DM908", "nombre": "Proyecto Final", "creditos": 8 }
+  ],
+  "correlatividades": [
+    { "materia": "MAT-902", "requiere": "MAT-901", "tipo": "regularizada" },
+    { "materia": "MAT-903", "requiere": "MAT-901", "tipo": "aprobada" },
+    { "materia": "MAT-904", "requiere": "MAT-902", "tipo": "aprobada" },
+    { "materia": "MAT-905", "requiere": "MAT-902", "tipo": "regularizada" },
+    { "materia": "MAT-906", "requiere": "MAT-903", "tipo": "aprobada" },
+    { "materia": "MAT-906", "requiere": "MAT-904", "tipo": "regularizada" },
+    { "materia": "MAT-907", "requiere": "MAT-905", "tipo": "aprobada" },
+    { "materia": "MAT-908", "requiere": "MAT-906", "tipo": "aprobada" },
+    { "materia": "MAT-908", "requiere": "MAT-907", "tipo": "aprobada" }
+  ]
+}
